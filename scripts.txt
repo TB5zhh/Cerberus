@@ -1,0 +1,4 @@
+CUDA_VISIBLE_DEVICES=0,1,4,5 python segment_open.py train -d datasets/cityscapes --arch drn_d_22 -c 19 -s 1024 --batch-size 32 --random-scale 2 --random-rotate 10 --epochs 100 --lr 0.007 --momentum 0.9 --lr-mode poly
+
+CUDA_VISIBLE_DEVICES=6 python segment_open.py test -d datasets/cityscapes --arch drn_d_22 -c 19 -s 1024 --resume model_best.pth.tar --phase val --batch-size 1 --ms
+

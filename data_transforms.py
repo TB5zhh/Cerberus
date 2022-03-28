@@ -261,6 +261,6 @@ class Compose(object):
         self.transforms = transforms
 
     def __call__(self, *args):
-        for t in self.transforms:
+        for idx, t in enumerate(self.transforms):
             args = t(*args)
         return args

@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import logging
+
 import cv2
 import argparse
 import json
@@ -22,25 +24,28 @@ import torch
 from torch import nn
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
-from torchvision import datasets, transforms
+from torchvision import datasets
 from torch.autograd import Variable
 import sys
 import drn
 import data_transforms as transforms
 import clip
 
+import json
 from IPython import embed
-
+from tqdm import tqdm
 try:
     from modules import batchnormsync
 except ImportError:
     pass
 
+print(torch.cuda.device_count())
 FORMAT = "[%(asctime)-15s %(filename)s:%(lineno)d %(funcName)s] %(message)s"
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+info = {"std": [0.1829540508368939, 0.18656561047509476, 0.18447508988480435], "mean": [0.29010095242892997, 0.32808144844279574, 0.28696394422942517]}
 
 CITYSCAPE_PALETTE = np.asarray([
     [128, 64, 128],
@@ -87,7 +92,6 @@ def fill_up_weights(up):
                 (1 - math.fabs(i / f - c)) * (1 - math.fabs(j / f - c))
     for c in range(1, w.size(0)):
         w[c, 0, :, :] = w[0, 0, :, :]
-
 
 class DRNSeg(nn.Module):
     def __init__(self, model_name, classes, pretrained_model=None,
@@ -146,7 +150,7 @@ class DRNSeg(nn.Module):
         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
         m.weight.data.normal_(0, math.sqrt(2. / n))
         m.bias.data.zero_()
-'''
+        '''
         if use_torch_up:
             self.up = nn.UpsamplingBilinear2d(scale_factor=8)
         else:
@@ -170,10 +174,10 @@ class DRNSeg(nn.Module):
         x6 = nn.functional.upsample(input = x6 , size = (s[2] , s[3]) , mode = 'bilinear')
         x = torch.cat([x , x1 , x2 , x3 , x6] , 1)
         x = self.relu(self.fc1_bn(self.fc1(x)))
-        y = self.drop(x)
-        x = self.fc2(y)
-        #y = self.up(x)
-        return self.softmax(x), x, y
+        x = self.drop(x)
+        y = self.fc2(x)
+        z = self.up(y)
+        return self.softmax(y), x, y, self.softmax(z)
 
     def optim_base_parameters(self, memo=None):
         for param in self.base.parameters():
@@ -202,7 +206,6 @@ class DRNSeg(nn.Module):
             yield param
         for param in self.fc2.parameters():
             yield param
-
 
 class SegList(torch.utils.data.Dataset):
     def __init__(self, data_dir, phase, transforms, list_dir=None,
@@ -245,11 +248,9 @@ class SegList(torch.utils.data.Dataset):
             self.label_list = [line.strip() for line in open(label_path, 'r')]
             assert len(self.image_list) == len(self.label_list)
 
-import json
-import os
-class EmulatedMS(torch.utils.data.Dataset):
+class EmulatedDataset(torch.utils.data.Dataset):
     """Don't forget to turn on shuffle in DataLoader"""
-    def __init__(self, data_dir, phase, transforms, scales, list_dir=None, series=[22], cut=5):
+    def __init__(self, data_dir, phase, transforms, scales=[1.], list_dir=None, series=list(range(100)), cut=5):
         assert cut > 0
         self.img_list = []
         self.mask_list = []
@@ -265,6 +266,7 @@ class EmulatedMS(torch.utils.data.Dataset):
         assert len(self.img_list) == len(self.mask_list)
         self.transforms = transforms
         self.scales = scales
+        print(len(self))
             
     def __getitem__(self, index):
         data = [
@@ -273,12 +275,7 @@ class EmulatedMS(torch.utils.data.Dataset):
         ]
         w, h = data[0].size
         out_data = list(self.transforms(*data))
-        ms_images = [
-            self.transforms(data[0].resize((int(w * s), int(h * s)), Image.BICUBIC))[0]
-            for s in self.scales
-        ]
         out_data.append(self.img_list[index])
-        out_data.extend(ms_images)
         return out_data
     
     def __len__(self):
@@ -326,7 +323,6 @@ class SegListMS(torch.utils.data.Dataset):
             self.label_list = [line.strip() for line in open(label_path, 'r')]
             assert len(self.image_list) == len(self.label_list)
 
-
 def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_features = None):
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -336,7 +332,7 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
+    for i, (input, target, __) in enumerate(val_loader):
         
         small_target = torch.zeros(int(target.size(0)) , int(target.size(1)/8) , int(target.size(2)/8))
         for index in range(0,target.size(0)):
@@ -353,26 +349,30 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
 
         with torch.no_grad():
             input = input.cuda()
-            target = target.cuda(async=True)
-            input_var = torch.autograd.Variable(input, volatile=True)
-            target_var = torch.autograd.Variable(target, volatile=True)
+            target = target.cuda()
 
             # compute output
             #output = model(input_var)[0]
             #loss = criterion(output, target_var)
-            output = model(input_var)
-            features = output[2]
-            text_features = text_features.to(torch.float32)
-            result = torch.einsum('abcd,eb->aecd' , (features,text_features))
+            output = model(input)
+            features = output[1]
+            
             tempsoftmax = nn.LogSoftmax()
-            result = tempsoftmax(result)
-            loss = criterion(result, target_var)
+            result = tempsoftmax(features)
+            loss = criterion(result, target)
+            # text_features = text_features.to(torch.float32)
+            # result = torch.einsum('abcd,eb->aecd' , (features,text_features))
+            # tempsoftmax = nn.LogSoftmax()
+            # result = tempsoftmax(result)
+            # loss = criterion(result, target)
 
             # measure accuracy and record loss
             # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
             losses.update(loss.item(), input.size(0))
             if eval_score is not None:
-                score.update(eval_score(result, target_var), input.size(0))
+                score1 = eval_score(result, target)
+                score.update(score1, input.size(0))
+                logging.info(f"Val loss: {loss} Score: {score1}")
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -389,7 +389,6 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
     logger.info(' * Score {top1.avg:.3f}'.format(top1=score))
 
     return score.avg
-
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -408,7 +407,6 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-
 def accuracy(output, target):
     """Computes the precision@k for the specified values of k"""
     # batch_size = target.size(0) * target.size(1) * target.size(2)
@@ -424,7 +422,6 @@ def accuracy(output, target):
     except:
         return 0
 
-
 def train(train_loader, model, criterion, optimizer, epoch,
           eval_score=None, print_freq=1, text_features = None):
     batch_time = AverageMeter()
@@ -437,10 +434,8 @@ def train(train_loader, model, criterion, optimizer, epoch,
 
     end = time.time()
 
-    for i, (input, target) in enumerate(train_loader):
-        # measure data loading time
+    for i, (input, target, _) in enumerate(train_loader):
         data_time.update(time.time() - end)
-        #embed()
         small_target = torch.zeros(int(target.size(0)) , int(target.size(1)/8) , int(target.size(2)/8))
         for index in range(0,target.size(0)):
             temp = target[index , : , :]
@@ -455,24 +450,36 @@ def train(train_loader, model, criterion, optimizer, epoch,
             target = target.float()
 
         input = input.cuda()
-        target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
+        target = target.cuda()
+        # input_var = torch.autograd.Variable(input)
+        # target_var = torch.autograd.Variable(target)
 
         # compute output
-        output = model(input_var)
-        features = output[2]
-        text_features = text_features.to(torch.float32)
-        result = torch.einsum('abcd,eb->aecd' , (features,text_features))
+        output = model(input)
+        features = output[1]
+        # embed()
         tempsoftmax = nn.LogSoftmax()
-        result = tempsoftmax(result)
-        loss = criterion(result, target_var)
+        result = tempsoftmax(features)
+        # embed()
+        loss = criterion(result, target)
+        
+        
+        # text_features = text_features.to(torch.float32)
+        # # embed()
+        # result = torch.einsum('abcd,eb->aecd' , (features,text_features))
+        # tempsoftmax = nn.LogSoftmax()
+        # result = tempsoftmax(result)
+        # loss = criterion(result, target)
+
 
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
         losses.update(loss.item(), input.size(0))
         if eval_score is not None:
-            scores.update(eval_score(result, target_var), input.size(0))
+            score = eval_score(result, target)
+            logging.info(f"Training: Iter: {i}, loss: {loss}, score: {score}")            
+            scores.update(score, input.size(0))
+
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -527,7 +534,6 @@ def train_seg(args):
 
     # Data loading code
     data_dir = args.data_dir
-    info = json.load(open(join(data_dir, 'info.json'), 'r'))
     normalize = transforms.Normalize(mean=info['mean'],
                                      std=info['std'])
     t = []
@@ -540,16 +546,16 @@ def train_seg(args):
               transforms.ToTensor(),
               normalize])
     train_loader = torch.utils.data.DataLoader(
-        SegList(data_dir, 'train', transforms.Compose(t)),
+        EmulatedDataset(data_dir, 'train', transforms.Compose(t), series=list(range(0,55))),
         batch_size=batch_size, shuffle=True, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
     val_loader = torch.utils.data.DataLoader(
-        SegList(data_dir, 'val', transforms.Compose([
+        EmulatedDataset(data_dir, 'val', transforms.Compose([
             transforms.RandomCrop(crop_size),
             transforms.ToTensor(),
             normalize,
-        ])),
+        ]), series=list(range(56,100))),
         batch_size=1, shuffle=False, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
@@ -608,7 +614,7 @@ def train_seg(args):
             print("=> no checkpoint found at '{}'".format(args.resume))
 
     if args.evaluate:
-        validate(val_loader, model, criterion, eval_score=accuracy)
+        validate(val_loader, model, criterion, eval_score=accuracy, text_features=text_features)
         return
 
     for epoch in range(start_epoch, args.epochs):
@@ -698,8 +704,7 @@ def test(eval_data_loader, model, num_classes,
     for iter, (image, label, name) in enumerate(eval_data_loader):
         data_time.update(time.time() - end)
         with torch.no_grad():
-            image_var = Variable(image, requires_grad=False, volatile=True)
-            final = model(image_var)[0]
+            final = model(image)[3]
             _, pred = torch.max(final, 1)
             pred = pred.cpu().data.numpy()
         batch_time.update(time.time() - end)
@@ -782,6 +787,7 @@ def test_ms(eval_data_loader, model, num_classes, scales,
         outputs = []
         with torch.no_grad():
             for image in images:
+                # embed()
                 image_var = Variable(image, requires_grad=False)
                 final = model(image_var)[0]
                 outputs.append(final.data)
@@ -790,7 +796,7 @@ def test_ms(eval_data_loader, model, num_classes, scales,
             # pred = pred.cpu().numpy()
             pred = final.argmax(axis=1)
         batch_time.update(time.time() - end)
-        embed()
+        # embed()
         if save_vis:
             save_output_images(pred, name, output_dir)
             #save_colorful_images(pred, name, output_dir + '_color',
@@ -827,20 +833,23 @@ def test_seg(args):
     model = torch.nn.DataParallel(single_model).cuda()
 
     data_dir = args.data_dir
-    info = json.load(open(join(data_dir, 'info.json'), 'r'))
     normalize = transforms.Normalize(mean=info['mean'], std=info['std'])
     #scales = [0.5, 0.75, 1.25, 1.5, 1.75]
     scales = [1]
     if args.ms:
-        dataset = EmulatedMS(data_dir, phase, transforms.Compose([
+        dataset = EmulatedDataset(data_dir, phase, transforms.Compose([
             transforms.ToTensor(),
             normalize,
-        ]), scales)
+        ]), scales, series=list(range(5)))
     else:
-        dataset = SegList(data_dir, phase, transforms.Compose([
+        dataset = EmulatedDataset(data_dir, phase, transforms.Compose([
             transforms.ToTensor(),
             normalize,
-        ]), out_name=True)
+        ]), series=list(range(5)))
+        # dataset = SegList(data_dir, phase, transforms.Compose([
+        #     transforms.ToTensor(),
+        #     normalize,
+        # ]), out_name=True)
     test_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=False, num_workers=num_workers,

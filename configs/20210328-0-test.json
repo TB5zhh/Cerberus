@@ -1,6 +1,6 @@
 {
     "cmd": "test",
-    "data_dir": "datasets/emulated",
+    "data_dir": "datasets/populated",
     "classes": 13,
     "crop_size": 1024,
     "step": 200,

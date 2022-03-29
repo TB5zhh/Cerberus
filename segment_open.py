@@ -29,7 +29,6 @@ from torch.autograd import Variable
 import sys
 import drn
 import data_transforms as transforms
-import clip
 
 import json
 from IPython import embed
@@ -68,6 +67,7 @@ CITYSCAPE_PALETTE = np.asarray([
     [0, 0, 230],
     [119, 11, 32],
     [0, 0, 0]], dtype=np.uint8)
+
 
 def downsampling(x, size=None, scale=None, mode='nearest'):
     if size is None:
@@ -327,6 +327,7 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
     batch_time = AverageMeter()
     losses = AverageMeter()
     score = AverageMeter()
+    mious = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
@@ -334,13 +335,13 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
     end = time.time()
     for i, (input, target, __) in enumerate(val_loader):
         
-        small_target = torch.zeros(int(target.size(0)) , int(target.size(1)/8) , int(target.size(2)/8))
-        for index in range(0,target.size(0)):
-            temp = target[index , : , :]
-            temp = cv2.resize(temp.numpy(),(int(target.size(1)/8) , int(target.size(2)/8)), interpolation=cv2.INTER_NEAREST)
-            temp = torch.Tensor(temp)
-            small_target[index,:,:] = temp
-        target = small_target
+        # small_target = torch.zeros(int(target.size(0)) , int(target.size(1)/8) , int(target.size(2)/8))
+        # for index in range(0,target.size(0)):
+        #     temp = target[index , : , :]
+        #     temp = cv2.resize(temp.numpy(),(int(target.size(1)/8) , int(target.size(2)/8)), interpolation=cv2.INTER_NEAREST)
+        #     temp = torch.Tensor(temp)
+        #     small_target[index,:,:] = temp
+        # target = small_target
         target = target.long()
         
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
@@ -355,7 +356,7 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
             #output = model(input_var)[0]
             #loss = criterion(output, target_var)
             output = model(input)
-            features = output[1]
+            features = output[3]
             
             tempsoftmax = nn.LogSoftmax()
             result = tempsoftmax(features)
@@ -365,7 +366,6 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
             # tempsoftmax = nn.LogSoftmax()
             # result = tempsoftmax(result)
             # loss = criterion(result, target)
-
             # measure accuracy and record loss
             # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
             losses.update(loss.item(), input.size(0))
@@ -373,6 +373,13 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
                 score1 = eval_score(result, target)
                 score.update(score1, input.size(0))
                 logging.info(f"Val loss: {loss} Score: {score1}")
+            _, pred = torch.max(features, 1)
+            pred = pred.cpu().data.numpy()
+            target = target.cpu().numpy()
+            hist = np.zeros((13, 13))
+            hist += fast_hist(pred.flatten(), target.flatten(), 13)
+            miou = round(np.nanmean(per_class_iu(hist)) * 100)
+            mious.update(miou, input.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -382,9 +389,10 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
             logger.info('Test: [{0}/{1}]\t'
                         'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                         'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                        'Score {score.val:.3f} ({score.avg:.3f})'.format(
+                        'Score {score.val:.3f} ({score.avg:.3f})\t'
+                        'mIoU {miou.val:.3f} ({miou.avg:.3f})'.format(
                 i, len(val_loader), batch_time=batch_time, loss=losses,
-                score=score))
+                score=score,miou=mious))
 
     logger.info(' * Score {top1.avg:.3f}'.format(top1=score))
 
@@ -436,13 +444,13 @@ def train(train_loader, model, criterion, optimizer, epoch,
 
     for i, (input, target, _) in enumerate(train_loader):
         data_time.update(time.time() - end)
-        small_target = torch.zeros(int(target.size(0)) , int(target.size(1)/8) , int(target.size(2)/8))
-        for index in range(0,target.size(0)):
-            temp = target[index , : , :]
-            temp = cv2.resize(temp.numpy(),(int(target.size(1)/8) , int(target.size(2)/8)), interpolation=cv2.INTER_NEAREST)
-            temp = torch.Tensor(temp)
-            small_target[index,:,:] = temp
-        target = small_target
+        # small_target = torch.zeros(int(target.size(0)) , int(target.size(1)/8) , int(target.size(2)/8))
+        # for index in range(0,target.size(0)):
+        #     temp = target[index , : , :]
+        #     temp = cv2.resize(temp.numpy(),(int(target.size(1)/8) , int(target.size(2)/8)), interpolation=cv2.INTER_NEAREST)
+        #     temp = torch.Tensor(temp)
+        #     small_target[index,:,:] = temp
+        # target = small_target
         target = target.long()
 
         if type(criterion) in [torch.nn.modules.loss.L1Loss,
@@ -456,13 +464,12 @@ def train(train_loader, model, criterion, optimizer, epoch,
 
         # compute output
         output = model(input)
-        features = output[1]
+        features = output[3]
         # embed()
         tempsoftmax = nn.LogSoftmax()
         result = tempsoftmax(features)
         # embed()
         loss = criterion(result, target)
-        
         
         # text_features = text_features.to(torch.float32)
         # # embed()
@@ -510,7 +517,6 @@ def train_seg(args):
     batch_size = args.batch_size
     num_workers = args.workers
     crop_size = args.crop_size
-
     print(' '.join(sys.argv))
 
     for k, v in args.__dict__.items():
@@ -546,7 +552,7 @@ def train_seg(args):
               transforms.ToTensor(),
               normalize])
     train_loader = torch.utils.data.DataLoader(
-        EmulatedDataset(data_dir, 'train', transforms.Compose(t), series=list(range(0,55))),
+        EmulatedDataset(data_dir, 'train', transforms.Compose(t), series=list(range(0,58))),
         batch_size=batch_size, shuffle=True, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
@@ -555,7 +561,7 @@ def train_seg(args):
             transforms.RandomCrop(crop_size),
             transforms.ToTensor(),
             normalize,
-        ]), series=list(range(56,100))),
+        ]), series=list(range(58,100))),
         batch_size=1, shuffle=False, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
@@ -574,7 +580,7 @@ def train_seg(args):
     best_prec1 = 0
     start_epoch = 0
 
-    lmodel, lpreprocess = clip.load("ViT-B/32" , device="cuda")
+    # lmodel, lpreprocess = clip.load("ViT-B/32" , device="cuda")
     voc = [
         "road" ,
         "sidewalk" ,
@@ -597,8 +603,8 @@ def train_seg(args):
         # "motorcycle" ,
         # "bicycle",
     ]
-    prompt = clip.tokenize(voc).cuda()
-    text_features = lmodel.encode_text(prompt).detach()
+    # prompt = clip.tokenize(voc).cuda()
+    # text_features = lmodel.encode_text(prompt).detach()
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -613,8 +619,8 @@ def train_seg(args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
+    validate(val_loader, model, criterion, eval_score=accuracy, text_features=None)
     if args.evaluate:
-        validate(val_loader, model, criterion, eval_score=accuracy, text_features=text_features)
         return
 
     for epoch in range(start_epoch, args.epochs):
@@ -622,10 +628,10 @@ def train_seg(args):
         logger.info('Epoch: [{0}]\tlr {1:.06f}'.format(epoch, lr))
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch,
-              eval_score=accuracy, text_features = text_features)
+              eval_score=accuracy, text_features =None)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, eval_score=accuracy, text_features = text_features)
+        prec1 = validate(val_loader, model, criterion, eval_score=accuracy, text_features = None)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
@@ -665,6 +671,7 @@ def per_class_iu(hist):
     return np.diag(hist) / (hist.sum(1) + hist.sum(0) - np.diag(hist))
 
 
+from datasets.emulated_process import convert_mask_to_rgb
 def save_output_images(predictions, filenames, output_dir):
     """
     Saves a given (B x C x H x W) into an image file.
@@ -672,7 +679,7 @@ def save_output_images(predictions, filenames, output_dir):
     """
     # pdb.set_trace()
     for ind in range(len(filenames)):
-        im = Image.fromarray(predictions[ind].astype(np.uint8))
+        im = Image.fromarray(convert_mask_to_rgb(predictions[ind].astype(np.uint8)))
         fn = os.path.join(output_dir, filenames[ind][:-4] + '.png')
         out_dir = split(fn)[0]
         if not exists(out_dir):

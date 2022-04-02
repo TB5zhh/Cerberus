@@ -3,4 +3,6 @@
 *.tar.gz
 *.pth
 *.png
+*.obj
+*.mat
 datasets/

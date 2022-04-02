@@ -1,38 +1,29 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import logging
-
-import cv2
 import argparse
 import json
 import logging
 import math
 import os
-import pdb
-from os.path import exists, join, split
+import shutil
+import sys
 import threading
-
 import time
+from os.path import exists, join, split
 
 import numpy as np
-import shutil
-
-import sys
-from PIL import Image
 import torch
-from torch import nn
 import torch.backends.cudnn as cudnn
-import torch.optim as optim
-from torchvision import datasets
-from torch.autograd import Variable
-import sys
-import drn
-import data_transforms as transforms
-
-import json
 from IPython import embed
-from tqdm import tqdm
+from PIL import Image
+from torch import nn
+from torch.autograd import Variable
+
+import data_transforms as transforms
+from dataset.emulated import EmulatedDataset
+import drn
+
 try:
     from modules import batchnormsync
 except ImportError:
@@ -228,7 +219,7 @@ class SegList(torch.utils.data.Dataset):
             data = np.stack([data , data , data] , axis = 2)
         data = [Image.fromarray(data)]
         if self.label_list is not None:
-       	    data.append(Image.open(join(self.data_dir, self.label_list[index])))
+            data.append(Image.open(join(self.data_dir, self.label_list[index])))
         data = list(self.transforms(*data))
         if self.out_name:
             if self.label_list is None:
@@ -248,38 +239,38 @@ class SegList(torch.utils.data.Dataset):
             self.label_list = [line.strip() for line in open(label_path, 'r')]
             assert len(self.image_list) == len(self.label_list)
 
-class EmulatedDataset(torch.utils.data.Dataset):
-    """Don't forget to turn on shuffle in DataLoader"""
-    def __init__(self, data_dir, phase, transforms, scales=[1.], list_dir=None, series=list(range(100)), cut=5):
-        assert cut > 0
-        self.img_list = []
-        self.mask_list = []
-        for s in series:
-            if not os.path.isdir(f'{data_dir}/{s}'):
-                continue
-            rgb_dir = f"{data_dir}/{s}/rgb"
-            mask_dir = f"{data_dir}/{s}/mask_idx"
-            last = min(len(os.listdir(rgb_dir)), len(os.listdir(mask_dir)))
-            for idx in sorted(os.listdir(rgb_dir)[cut:last]):
-                self.img_list.append(f"{rgb_dir}/{idx}")
-                self.mask_list.append(f"{mask_dir}/{idx}")
-        assert len(self.img_list) == len(self.mask_list)
-        self.transforms = transforms
-        self.scales = scales
-        print(len(self))
+# class EmulatedDataset(torch.utils.data.Dataset):
+#     """Don't forget to turn on shuffle in DataLoader"""
+#     def __init__(self, data_dir, phase, transforms, scales=[1.], list_dir=None, series=list(range(100)), cut=10):
+#         assert cut > 0
+#         self.img_list = []
+#         self.mask_list = []
+#         for s in series:
+#             if not os.path.isdir(f'{data_dir}/{s}'):
+#                 continue
+#             rgb_dir = f"{data_dir}/{s}/rgb"
+#             mask_dir = f"{data_dir}/{s}/mask_idx"
+#             last = min(len(os.listdir(rgb_dir)), len(os.listdir(mask_dir)))
+#             for idx in sorted(os.listdir(rgb_dir)[cut:last]):
+#                 self.img_list.append(f"{rgb_dir}/{idx}")
+#                 self.mask_list.append(f"{mask_dir}/{idx}")
+#         assert len(self.img_list) == len(self.mask_list)
+#         self.transforms = transforms
+#         self.scales = scales
+#         print(len(self))
             
-    def __getitem__(self, index):
-        data = [
-            Image.open(self.img_list[index]),
-            Image.open(self.mask_list[index]),
-        ]
-        w, h = data[0].size
-        out_data = list(self.transforms(*data))
-        out_data.append(self.img_list[index])
-        return out_data
+#     def __getitem__(self, index):
+#         data = [
+#             Image.open(self.img_list[index]),
+#             Image.open(self.mask_list[index]),
+#         ]
+#         w, h = data[0].size
+#         out_data = list(self.transforms(*data))
+#         out_data.append(self.img_list[index])
+#         return out_data
     
-    def __len__(self):
-        return len(self.img_list)
+#     def __len__(self):
+#         return len(self.img_list)
         
 class SegListMS(torch.utils.data.Dataset):
     def __init__(self, data_dir, phase, transforms, scales, list_dir=None):
@@ -376,8 +367,8 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10, text_
             _, pred = torch.max(features, 1)
             pred = pred.cpu().data.numpy()
             target = target.cpu().numpy()
-            hist = np.zeros((13, 13))
-            hist += fast_hist(pred.flatten(), target.flatten(), 13)
+            hist = np.zeros((14, 14))
+            hist += fast_hist(pred.flatten(), target.flatten(), 14)
             miou = round(np.nanmean(per_class_iu(hist)) * 100)
             mious.update(miou, input.size(0))
 
@@ -552,16 +543,16 @@ def train_seg(args):
               transforms.ToTensor(),
               normalize])
     train_loader = torch.utils.data.DataLoader(
-        EmulatedDataset(data_dir, 'train', transforms.Compose(t), series=list(range(0,58))),
+        EmulatedDataset(data_dir, transforms.Compose(t), series=list(range(0,58)), type=args.dataset_type, cut=10),
         batch_size=batch_size, shuffle=True, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
     val_loader = torch.utils.data.DataLoader(
-        EmulatedDataset(data_dir, 'val', transforms.Compose([
+        EmulatedDataset(data_dir, transforms.Compose([
             transforms.RandomCrop(crop_size),
             transforms.ToTensor(),
             normalize,
-        ]), series=list(range(58,100))),
+        ]),type=args.dataset_type, series=list(range(58,100)), cut=10),
         batch_size=1, shuffle=False, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
@@ -672,6 +663,8 @@ def per_class_iu(hist):
 
 
 from datasets.emulated_process import convert_mask_to_rgb
+
+
 def save_output_images(predictions, filenames, output_dir):
     """
     Saves a given (B x C x H x W) into an image file.
@@ -844,19 +837,16 @@ def test_seg(args):
     #scales = [0.5, 0.75, 1.25, 1.5, 1.75]
     scales = [1]
     if args.ms:
-        dataset = EmulatedDataset(data_dir, phase, transforms.Compose([
+        dataset = EmulatedDataset(data_dir, transforms.Compose([
             transforms.ToTensor(),
             normalize,
-        ]), scales, series=list(range(5)))
+        ]), scales, type=args.dataset_type, series=list(range(5)), cut=10)
     else:
-        dataset = EmulatedDataset(data_dir, phase, transforms.Compose([
+        dataset = EmulatedDataset(data_dir, transforms.Compose([
             transforms.ToTensor(),
             normalize,
-        ]), series=list(range(5)))
-        # dataset = SegList(data_dir, phase, transforms.Compose([
-        #     transforms.ToTensor(),
-        #     normalize,
-        # ]), out_name=True)
+        ]), type=args.dataset_type, series=list(range(5)), cut=10)
+
     test_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
@@ -947,8 +937,10 @@ def parse_args():
 
     return args
 
-import sys
 import json
+import sys
+
+
 def main():
     with open(sys.argv[1]) as f:
         args = argparse.Namespace(**json.load(f))

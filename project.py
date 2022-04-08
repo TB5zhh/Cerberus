@@ -44,7 +44,7 @@ def convert_euler_angles_to_matrix(angles):
     return R_Y.T, R_Z.T, R_X.T
 
 
-def project(depth, features, src_pose, dst_pose):
+def project(depth, features, src_pose, dst_pose, return_mask=False):
 
     src_coords = convert_depth_to_coords(depth)
     sry, srz, srx = convert_euler_angles_to_matrix(src_pose[1])
@@ -75,5 +75,11 @@ def project(depth, features, src_pose, dst_pose):
 
     unique_dst_img = torch.as_tensor(features[available].reshape((-1, features.shape[-1])))[indices]
 
-    return torch.sparse_coo_tensor(unique_dst_coords, unique_dst_img, features.shape).to_dense()
+    if return_mask:
+        return (
+                    torch.sparse_coo_tensor(unique_dst_coords, unique_dst_img, features.shape).to_dense(),
+                    torch.sparse_coo_tensor(unique_dst_coords, available.reshape((-1, 1)).to(torch.int8)[indices], (depth.shape[0], depth.shape[1], 1)).to_dense().to(torch.bool)
+                )
+    else:
+        return torch.sparse_coo_tensor(unique_dst_coords, unique_dst_img, features.shape).to_dense()
 

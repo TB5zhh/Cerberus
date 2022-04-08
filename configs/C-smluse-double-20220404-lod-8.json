@@ -1,11 +1,11 @@
 {
     "cmd": "train",
-    "data_dir": "datasets/secfence2",
+    "data_dir": "datasets/20220404-lod-8",
     "classes": 14,
     "crop_size": 1024,
     "step": 200,
     "arch": "drn_d_22",
-    "batch_size": 4,
+    "batch_size": 8,
     "epochs": 150,
     "lr": 0.02,
     "lr_mode": "step",
@@ -22,6 +22,6 @@
     "type": "double",
     "cut": 10,
     "action": "use",
-    "vis_dir": "vis/project_swingcouch_new-0404",
-    "threshold": 0.5
+    "vis_dir": "vis_project/lod-7-format-4",
+    "threshold": 0.25
 }

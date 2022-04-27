@@ -43,12 +43,12 @@ except ImportError:
 
 
 FORMAT = "[%(asctime)-15s %(filename)s:%(lineno)d %(funcName)s] %(message)s"
-logging.basicConfig(format=FORMAT, filename='./'+ datetime.now().strftime("%Y%m%d_%H%M%S") + '.txt')
+logging.basicConfig(format=FORMAT, filename='logs/'+ datetime.now().strftime("%Y%m%d_%H%M%S") + '.txt')
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-TASK =None  # 'ATTRIBUTE', 'AFFORDANCE', 'SEGMENTATION' 
+TASK ='SEGMENTATION' # 'ATTRIBUTE', 'AFFORDANCE', 'SEGMENTATION' 
 TRANSFER_FROM_TASK = None  #'ATTRIBUTE', 'AFFORDANCE', 'SEGMENTATION', or None to unable transfer
 
 
@@ -957,7 +957,7 @@ def train_seg(args):
                 normalize])
             
     train_loader = torch.utils.data.DataLoader(
-        SegMultiHeadList(data_dir, 'train', transforms.Compose(t)),
+        SegMultiHeadList(data_dir, 'train', transforms.Compose(t), list_dir=args.list_dir),
         batch_size=batch_size, shuffle=True, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
@@ -967,7 +967,7 @@ def train_seg(args):
             transforms.RandomCropMultiHead(crop_size),
             transforms.ToTensorMultiHead(),
             normalize,
-        ])),
+        ]), list_dir=args.list_dir),
         batch_size=1, shuffle=False, num_workers=num_workers,
         pin_memory=True, drop_last=True
     )
@@ -1732,6 +1732,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('cmd', choices=['train', 'test'])
     parser.add_argument('-d', '--data-dir', default='../dataset/nyud2')
+    parser.add_argument('-l', '--list-dir', default='../dataset/nyud2')
     parser.add_argument('-c', '--classes', default=0, type=int)
     parser.add_argument('-s', '--crop-size', default=0, type=int)
     parser.add_argument('--step', type=int, default=200)
@@ -1789,7 +1790,7 @@ def parse_args():
 def main():
     args = parse_args()
     if args.cmd == 'train':
-        train_seg_cerberus(args)
+        train_seg(args)
     elif args.cmd == 'test':
         test_seg_cerberus(args)
 

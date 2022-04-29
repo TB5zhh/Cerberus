@@ -128,7 +128,7 @@ elif TASK == 'AFFORDANCE':
 elif TASK =='SEGMENTATION':
     task_list = ['Segmentation']
     FILE_DESCRIPTION = ''
-    PALETTE = NYU40_PALETTE
+    PALETTE = CITYSCAPE_PALETTE
     EVAL_METHOD = 'mIoUAll'
 else:
     task_list = None
@@ -1601,12 +1601,12 @@ def test_seg(args):
         dataset = SegListMSMultiHead(data_dir, phase, transforms.Compose([
             transforms.ToTensorMultiHead(),
             normalize,
-        ]), scales)
+        ]), scales, list_dir=args.list_dir)
     else:
         dataset = SegMultiHeadList(data_dir, phase, transforms.Compose([
             transforms.ToTensorMultiHead(),
             normalize,
-        ]), out_name=True)
+        ]), out_name=True, list_dir=args.list_dir)
     test_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size, shuffle=False, num_workers=num_workers,
@@ -1792,7 +1792,7 @@ def main():
     if args.cmd == 'train':
         train_seg(args)
     elif args.cmd == 'test':
-        test_seg_cerberus(args)
+        test_seg(args)
 
 
 if __name__ == '__main__':

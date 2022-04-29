@@ -268,7 +268,7 @@ class SegMultiHeadList(torch.utils.data.Dataset):
     def read_lists(self):
         image_path = join(self.list_dir, self.phase + FILE_DESCRIPTION+ '_images.txt')
         label_path = join(self.list_dir, self.phase + FILE_DESCRIPTION+ '_labels.txt')
-        assert exists(image_path)
+        assert exists(image_path), image_path
         self.image_list = [line.strip() for line in open(image_path, 'r')]
         if exists(label_path):
             self.label_list = [line.strip() for line in open(label_path, 'r')]

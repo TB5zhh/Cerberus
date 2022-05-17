@@ -1,0 +1,12 @@
+CUDA_VISIBLE_DEVICES=3 python -m pdb main.py train \
+--data-dir /mnt/yuhang/dataset/sample \
+--classes 40 \
+--crop-size 512 \
+--batch-size 2 \
+--random-scale 2 \
+--random-rotate 10 \
+--epochs 200 \
+--lr 0.007 \
+--momentum 0.9 \
+--lr-mode poly \
+--workers 12 

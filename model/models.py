@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .base_model import BaseModel
-from model.vit import forward_flex
+from Cerberus.model.vit import forward_flex
+# from model.vit import forward_flex
+
 from .blocks import (
     FeatureFusionBlock,
     FeatureFusionBlock_custom,

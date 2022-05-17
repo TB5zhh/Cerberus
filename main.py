@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
-from typing import OrderedDict
 import argparse
 import json
 import logging
@@ -35,7 +33,6 @@ import data_transforms as transforms
 from model.models import DPTSegmentationModel, DPTSegmentationModelMultiHead, TransferNet, CerberusSegmentationModelMultiHead
 from model.transforms import PrepareForNet
 
-
 try:
     from modules import batchnormsync
 except ImportError:
@@ -48,8 +45,8 @@ logging.basicConfig(format=FORMAT, filename='./'+ datetime.now().strftime("%Y%m%
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-TASK =None  # 'ATTRIBUTE', 'AFFORDANCE', 'SEGMENTATION' 
-TRANSFER_FROM_TASK = None  #'ATTRIBUTE', 'AFFORDANCE', 'SEGMENTATION', or None to unable transfer
+TASK = 'SEGMENTATION'  # 'ATTRIBUTE', 'AFFORDANCE', 'SEGMENTATION' 
+TRANSFER_FROM_TASK = 'SEGMENTATION'  #'ATTRIBUTE', 'AFFORDANCE', 'SEGMENTATION', or None to unable transfer
 
 
 CITYSCAPE_PALETTE = np.asarray([
@@ -102,9 +99,19 @@ NYU40_PALETTE = np.asarray([
     [80, 160, 0], 
     [80, 160, 80], 
     [80, 160, 160], 
-    [80, 160, 240], [80, 240, 0], [80, 240, 80], [80, 240, 160], [80, 240, 240], 
-    [160, 0, 0], [160, 0, 80], [160, 0, 160], [160, 0, 240], [160, 80, 0], 
-    [160, 80, 80], [160, 80, 160], [160, 80, 240]], dtype=np.uint8)
+    [80, 160, 240], 
+    [80, 240, 0], 
+    [80, 240, 80], 
+    [80, 240, 160], 
+    [80, 240, 240], 
+    [160, 0, 0], 
+    [160, 0, 80], 
+    [160, 0, 160], 
+    [160, 0, 240], 
+    [160, 80, 0], 
+    [160, 80, 80],
+    [160, 80, 160], 
+    [160, 80, 240]], dtype=np.uint8)
 
 
 AFFORDANCE_PALETTE = np.asarray([
@@ -238,8 +245,8 @@ class SegMultiHeadList(torch.utils.data.Dataset):
         self.out_name = out_name
         self.phase = phase
         self.transforms = transforms
-        self.image_list = None
-        self.label_list = None
+        self.image_list = []
+        self.label_list = []
         self.bbox_list = None
         self.read_lists()
 
@@ -266,13 +273,16 @@ class SegMultiHeadList(torch.utils.data.Dataset):
         return len(self.image_list)
 
     def read_lists(self):
-        image_path = join(self.list_dir, self.phase + FILE_DESCRIPTION+ '_images.txt')
-        label_path = join(self.list_dir, self.phase + FILE_DESCRIPTION+ '_labels.txt')
-        assert exists(image_path)
-        self.image_list = [line.strip() for line in open(image_path, 'r')]
-        if exists(label_path):
-            self.label_list = [line.strip() for line in open(label_path, 'r')]
-            assert len(self.image_list) == len(self.label_list)
+        image_path = join(self.list_dir, 'RGB')
+        file_path = sorted(os.listdir(image_path))
+        for i in range(len(file_path)):
+            file_rgb = join(self.list_dir, 'RGB', file_path[i])
+            file_label = join(self.list_dir, 'SEM', file_path[i])
+            for j in range(len(os.listdir(file_rgb))):
+                self.image_list.append(join('RGB', str(i).zfill(2), str(sorted(os.listdir(file_rgb))[j])))
+                self.label_list.append(join('SEM', str(i).zfill(2), str(sorted(os.listdir(file_label))[j])))
+
+
 
 
 class SegListMS(torch.utils.data.Dataset):
@@ -317,9 +327,10 @@ class SegListMS(torch.utils.data.Dataset):
             assert len(self.image_list) == len(self.label_list)
 
 class SegListMSMultiHead(torch.utils.data.Dataset):
-    def __init__(self, data_dir, phase, transforms, scales, list_dir=None):
+    def __init__(self, data_dir, img_dir, phase, transforms, scales, list_dir=None):
         self.list_dir = data_dir if list_dir is None else list_dir
         self.data_dir = data_dir
+        self.img_dir = img_dir
         self.phase = phase
         self.transforms = transforms
         self.image_list = None
@@ -329,7 +340,7 @@ class SegListMSMultiHead(torch.utils.data.Dataset):
         self.scales = scales
 
     def __getitem__(self, index):
-        data = [Image.open(join(self.data_dir, self.image_list[index]))]
+        data = [Image.open(join(self.img_dir, self.image_list[index]))]
         w, h = 640, 480
         data = np.array(data[0])
         if len(data.shape) == 2:
@@ -338,7 +349,7 @@ class SegListMSMultiHead(torch.utils.data.Dataset):
         label_data = list()
         if self.label_list is not None:
             for it in self.label_list[index].split(','):
-       	        label_data.append(Image.open(join(self.data_dir, it)))
+       	        label_data.append(Image.open(it))
             data.append(label_data)
         out_data = list(self.transforms(*data))
         ms_images = [self.transforms(data[0].resize((round(int(w * s)/32) * 32 , round(int(h * s)/32) * 32),
@@ -352,12 +363,11 @@ class SegListMSMultiHead(torch.utils.data.Dataset):
         return len(self.image_list)
 
     def read_lists(self):
-        image_path = join(self.list_dir, self.phase + FILE_DESCRIPTION+ '_images.txt')
-        label_path = join(self.list_dir, self.phase + FILE_DESCRIPTION+ '_labels.txt')
-        assert exists(image_path)
-        self.image_list = [line.strip() for line in open(image_path, 'r')]
+        image_path = self.img_dir
+        label_path = join(self.data_dir, 'labels')
+        self.image_list = sorted(os.listdir(image_path))
         if exists(label_path):
-            self.label_list = [line.strip() for line in open(label_path, 'r')]
+            self.label_list = sorted(os.listdir(label_path))
             assert len(self.image_list) == len(self.label_list)
 
 
@@ -921,17 +931,19 @@ def train_seg(args):
     for k, v in args.__dict__.items():
         print(k, ':', v)
     
-    if len(task_list) == 1:
-        single_model = DPTSegmentationModel(args.classes, backbone="vitb_rn50_384")
-    else:
-        single_model = DPTSegmentationModelMultiHead(args.classes, task_list, backbone="vitb_rn50_384")
+    # if len(task_list) == 1:
+    #     single_model = DPTSegmentationModel(args.classes, backbone="vitb_rn50_384")
+    # else:
+    #     single_model = DPTSegmentationModelMultiHead(args.classes, task_list, backbone="vitb_rn50_384")
+    single_model = DPTSegmentationModel(args.classes, backbone="vitb_rn50_384")
     model = single_model.cuda()
 
     if args.trans:
-        if len(middle_task_list) == 1:
-            single_model = DPTSegmentationModel(40, backbone="vitb_rn50_384")
-        else:
-            single_model = DPTSegmentationModelMultiHead(2, middle_task_list, backbone="vitb_rn50_384")
+        # if len(middle_task_list) == 1:
+        #     single_model = DPTSegmentationModel(40, backbone="vitb_rn50_384")
+        # else:
+        #     single_model = DPTSegmentationModelMultiHead(2, middle_task_list, backbone="vitb_rn50_384")
+        single_model = DPTSegmentationModel(40, backbone="vitb_rn50_384")
         model = single_model.cuda()
         model_trans = TransferNet(middle_task_list, task_list)
         model_trans = model_trans.cuda()
@@ -951,10 +963,13 @@ def train_seg(args):
         t.append(transforms.RandomRotateMultiHead(args.random_rotate))
     if args.random_scale > 0:
         t.append(transforms.RandomScaleMultiHead(args.random_scale))
+    # t.extend([transforms.RandomHorizontalFlipMultiHead(),
+    #             transforms.ToTensorMultiHead(),
+    #             normalize]) 
     t.extend([transforms.RandomCropMultiHead(crop_size),
                 transforms.RandomHorizontalFlipMultiHead(),
                 transforms.ToTensorMultiHead(),
-                normalize])
+                normalize]) 
             
     train_loader = torch.utils.data.DataLoader(
         SegMultiHeadList(data_dir, 'train', transforms.Compose(t)),
@@ -962,6 +977,11 @@ def train_seg(args):
         pin_memory=True, drop_last=True
     )
 
+    # val_loader = torch.utils.data.DataLoader(
+    #         SegMultiHeadList(data_dir, 'val', transforms.Compose([
+    #         transforms.ToTensorMultiHead(),
+    #         normalize,
+    #     ])),
     val_loader = torch.utils.data.DataLoader(
             SegMultiHeadList(data_dir, 'val', transforms.Compose([
             transforms.RandomCropMultiHead(crop_size),
@@ -1097,7 +1117,7 @@ def train_seg_cerberus(args):
     criterion.cuda()
 
     # Data loading code
-    data_dir = args.data_dir
+    data_dir = args.data_dir  
     info = json.load(open(join(data_dir, 'info.json'), 'r'))
 
 
@@ -1285,9 +1305,11 @@ def save_colorful_images(predictions, filenames, output_dir, palettes):
    for ind in range(len(filenames)):
        im = Image.fromarray(palettes[predictions[ind].squeeze()])
        fn = os.path.join(output_dir, filenames[ind][:-4] + '.png')
+       label_save = os.path.join(output_dir, filenames[ind][:-4] + '.npy')
        out_dir = split(fn)[0]
        if not exists(out_dir):
            os.makedirs(out_dir)
+       np.save(label_save, predictions[ind].squeeze())
        im.save(fn)
 
 def resize_4d_tensor(tensor, width, height):
@@ -1456,6 +1478,8 @@ def test_ms_cerberus(eval_data_loader, model, scales,
     for i, in_tar_pair in enumerate(zip(eval_data_loader[0], eval_data_loader[1], eval_data_loader[2])):
         for index, input in enumerate(in_tar_pair):
             if index < 2:
+                continue
+            if index < 2:
                 num_classes = 2
                 PALETTE = AFFORDANCE_PALETTE
             elif index == 2:
@@ -1507,17 +1531,18 @@ def test_ms_cerberus(eval_data_loader, model, scales,
 
             batch_time_array[index].update(time.time() - end)
             if save_vis:
-                for idx in range(len(pred)):
-                    assert len(name) == 1
-                    file_name = (name[0][:-4] + task_list[idx] + '.png',)
-                    save_output_images(pred[idx], file_name, output_dir)
-                    save_colorful_images(pred[idx], file_name, output_dir + '_color',
+                if index == 2:
+                    for idx in range(len(pred)):
+                        assert len(name) == 1
+                        file_name = (name[0][:-4] + task_list[idx] + '.png',)
+                        save_output_images(pred[idx], file_name, output_dir)
+                        save_colorful_images(pred[idx], file_name, output_dir + '_color',
                                         PALETTE)
-                    if index == 2:
-                        gt_name = (name[0][:-4] + task_list[idx] + '_gt.png',)    
-                        label_mask =  (label[idx]==255)
+                        # if index == 2:
+                        #     gt_name = (name[0][:-4] + task_list[idx] + '_gt.png',)    
+                        #     label_mask =  (label[idx]==255)
 
-                        save_colorful_images((label[idx]-label_mask*255).numpy(), gt_name, output_dir + '_color',PALETTE)
+                        #     save_colorful_images((label[idx]-label_mask*255).numpy(), gt_name, output_dir + '_color',PALETTE)
 
             if has_gt:
                 map_score_array = list()
@@ -1593,12 +1618,13 @@ def test_seg(args):
     model = single_model.cuda()
 
     data_dir = args.data_dir
+    img_dir = args.img_dir
     info = json.load(open(join(data_dir, 'info.json'), 'r'))
     normalize = transforms.Normalize(mean=info['mean'], std=info['std'])
     scales = [0.9, 1, 1.25]
 
     if args.ms:
-        dataset = SegListMSMultiHead(data_dir, phase, transforms.Compose([
+        dataset = SegListMSMultiHead(data_dir, img_dir, phase, transforms.Compose([
             transforms.ToTensorMultiHead(),
             normalize,
         ]), scales)
@@ -1670,6 +1696,7 @@ def test_seg_cerberus(args):
     model = single_model.cuda()
 
     data_dir = args.data_dir
+    img_dir = args.img_dir
     info = json.load(open(join(data_dir, 'info.json'), 'r'))
     normalize = transforms.Normalize(mean=info['mean'], std=info['std'])
     scales = [0.9, 1, 1.25]
@@ -1678,7 +1705,7 @@ def test_seg_cerberus(args):
     if args.ms:
         for i in ['_attribute', '_affordance', '']:
             test_loader_list.append(torch.utils.data.DataLoader(
-                SegListMSMultiHead(data_dir, phase + i, transforms.Compose([
+                SegListMSMultiHead(data_dir, img_dir, phase + i, transforms.Compose([
                     transforms.ToTensorMultiHead(),
                     normalize,]), 
                 scales
@@ -1731,7 +1758,8 @@ def parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('cmd', choices=['train', 'test'])
-    parser.add_argument('-d', '--data-dir', default='../dataset/nyud2')
+    parser.add_argument('-d', '--data-dir', default='/mnt/yuhang/dataset/nyud2')
+    parser.add_argument('-i', '--img-dir', default='/mnt/yuhang/dataset/nyud2/000000')
     parser.add_argument('-c', '--classes', default=0, type=int)
     parser.add_argument('-s', '--crop-size', default=0, type=int)
     parser.add_argument('--step', type=int, default=200)
@@ -1762,7 +1790,7 @@ def parse_args():
                         help='use pre-trained model')
     parser.add_argument('-j', '--workers', type=int, default=8)
     parser.add_argument('--load-release', dest='load_rel', default=None)
-    parser.add_argument('--phase', default='val')
+    parser.add_argument('--phase', default='test')
     parser.add_argument('--random-scale', default=0, type=float)
     parser.add_argument('--random-rotate', default=0, type=int)
     parser.add_argument('--bn-sync', action='store_true')
@@ -1789,7 +1817,7 @@ def parse_args():
 def main():
     args = parse_args()
     if args.cmd == 'train':
-        train_seg_cerberus(args)
+        train_seg(args)
     elif args.cmd == 'test':
         test_seg_cerberus(args)
 

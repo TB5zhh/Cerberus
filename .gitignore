@@ -1,0 +1,8 @@
+.vscode/
+*.tar
+*.png
+
+
+*.whl
+*.npy
+runs/
